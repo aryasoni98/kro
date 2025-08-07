@@ -81,6 +81,7 @@ func (tf *transformer) buildOpenAPISchema(obj map[string]interface{}) (*extv1.JS
 		Type:       "object",
 		Properties: map[string]extv1.JSONSchemaProps{},
 	}
+	childHasDefault := false
 
 	for key, value := range obj {
 		fieldSchema, err := tf.transformField(key, value, schema)
@@ -88,6 +89,13 @@ func (tf *transformer) buildOpenAPISchema(obj map[string]interface{}) (*extv1.JS
 			return nil, err
 		}
 		schema.Properties[key] = *fieldSchema
+		if fieldSchema.Default != nil {
+			childHasDefault = true
+		}
+	}
+
+	if len(schema.Required) == 0 && childHasDefault && schema.Default == nil {
+		schema.Default = &extv1.JSON{Raw: []byte("{}")}
 	}
 
 	return schema, nil
@@ -216,8 +224,15 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 	for _, marker := range markers {
 		switch marker.MarkerType {
 		case MarkerTypeRequired:
-			if parentSchema != nil {
+			switch isRequired, err := strconv.ParseBool(marker.Value); {
+			case err != nil:
+				return fmt.Errorf("failed to parse required marker value: %w", err)
+			case parentSchema == nil:
+				return fmt.Errorf("required marker can't be applied; parent schema is nil")
+			case isRequired:
 				parentSchema.Required = append(parentSchema.Required, key)
+			default:
+				// ignore
 			}
 		case MarkerTypeDefault:
 			var defaultValue []byte

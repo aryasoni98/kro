@@ -173,11 +173,23 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 KO ?= $(LOCALBIN)/ko
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
+CHAINSAW ?= $(LOCALBIN)/chainsaw
 
 ## Tool Versions
 KO_VERSION ?= v0.17.1
 KUSTOMIZE_VERSION ?= v5.2.1
 CONTROLLER_TOOLS_VERSION ?= v0.16.2
+CHAINSAW_VERSION ?= v0.2.12
+
+.PHONY: chainsaw
+chainsaw: $(CHAINSAW) ## Download chainsaw locally if necessary. If wrong version is installed, it will be removed before downloading.
+$(CHAINSAW): $(LOCALBIN)
+	@if test -x $(LOCALBIN)/chainsaw && ! $(LOCALBIN)/chainsaw version | grep -q $(CHAINSAW_VERSION); then \
+		echo "$(LOCALBIN)/chainsaw version is not expected $(CHAINSAW_VERSION). Removing it before installing."; \
+		rm -rf $(LOCALBIN)/chainsaw; \
+	fi
+	test -s $(LOCALBIN)/chainsaw || GOBIN=$(LOCALBIN) GO111MODULE=on go install github.com/kyverno/chainsaw@$(CHAINSAW_VERSION)
+
 
 .PHONY: ko
 ko: $(KO) ## Download ko locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -255,7 +267,7 @@ deploy-kind: ko
 	make install
 	# This generates deployment with ko://... used in image.
 	# ko then intercepts it builds image, pushes to kind node, replaces the image in deployment and applies it
-	helm template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -
+	helm template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=true | $(KO) apply -f -
 	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
 
@@ -266,6 +278,16 @@ ko-apply: ko
 ## CLI
 .PHONY: cli
 cli: 
-	go build -o bin/kro cmd/cli/main.go
+	go build -o bin/kro cmd/kro/main.go
 	sudo mv bin/kro /usr/local/bin
 	@echo "CLI built successfully"
+
+##@ E2E Tests
+
+.PHONY: test-e2e
+test-e2e: chainsaw ## Run e2e tests
+	$(CHAINSAW) test ./test/e2e/chainsaw
+
+.PHONY: test-e2e-kind
+test-e2e-kind: deploy-kind
+	make test-e2e
